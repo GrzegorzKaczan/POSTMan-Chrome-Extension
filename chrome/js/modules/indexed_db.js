@@ -140,11 +140,24 @@ pm.indexedDB = {
         var trans = db.transaction(["collections"], "readwrite");
         var store = trans.objectStore("collections");
 
-        var request = store.put({
-            "id":collection.id,
-            "name":collection.name,
-            "timestamp":new Date().getTime()
-        });
+        var request;
+
+        if("order" in collection) {
+            request = store.put({
+                "id":collection.id,
+                "name":collection.name,
+                "order":collection.order,
+                "timestamp":new Date().getTime()
+            });
+        }
+        else {
+            request = store.put({
+                "id":collection.id,
+                "name":collection.name,
+                "timestamp":new Date().getTime()
+            });
+        }
+        
 
         request.onsuccess = function () {
             callback(collection);
@@ -177,6 +190,15 @@ pm.indexedDB = {
         var trans = db.transaction(["collection_requests"], "readwrite");
         var store = trans.objectStore("collection_requests");
 
+        var version;
+
+        if ("version" in req) {
+            version = req.version;
+        }
+        else {
+            version = 1;
+        }
+        
         var collectionRequest = store.put({
             "collectionId":req.collectionId,
             "id":req.id,
@@ -185,10 +207,11 @@ pm.indexedDB = {
             "url":req.url.toString(),
             "method":req.method.toString(),
             "headers":req.headers.toString(),
-            "data":req.data.toString(),
+            "data":req.data,
             "dataMode":req.dataMode.toString(),
             "timestamp":req.timestamp,
-            "responses":req.responses
+            "responses":req.responses,
+            "version":req.version
         });
 
         collectionRequest.onsuccess = function () {

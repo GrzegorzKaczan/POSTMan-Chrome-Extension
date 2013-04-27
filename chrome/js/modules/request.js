@@ -9,11 +9,12 @@ pm.request = {
     dataMode:"params",
     isFromCollection:false,
     collectionRequestId:"",
-    methodsWithBody:["POST", "PUT", "PATCH", "DELETE"],
+    methodsWithBody:["POST", "PUT", "PATCH", "DELETE", "LINK", "UNLINK"],
     areListenersAdded:false,
     startTime:0,
     endTime:0,
     xhr:null,
+    editorMode:0,
     responses:[],
 
     body:{
@@ -94,7 +95,7 @@ pm.request = {
                   $('#body-editor-mode-selector-format').removeClass('disabled');
                 }
 
-                pm.request.body.autoFormatEditor(mode);
+                //pm.request.body.autoFormatEditor(mode);
                 pm.request.body.codeMirror.refresh();
             }
         },
@@ -187,7 +188,7 @@ pm.request = {
                 return;
               }
 
-              pm.request.body.autoFormatEditor(pm.request.body.codeMirror.getMode().name);
+              //pm.request.body.autoFormatEditor(pm.request.body.codeMirror.getMode().name);
             });
         },
 
@@ -271,7 +272,8 @@ pm.request = {
             return pm.request.body.mode;
         },
 
-        getData:function () {
+        //Be able to return direct keyvaleditor params
+        getData:function (asObjects) {
             var data;
             var mode = pm.request.body.mode;
             var params;
@@ -285,12 +287,21 @@ pm.request = {
                 for (i = 0; i < params.length; i++) {
                     param = {
                         key:params[i].key,
-                        value:params[i].value
+                        value:params[i].value,
+                        type:params[i].type
                     };
 
                     newParams.push(param);
                 }
-                data = pm.request.getBodyParamString(newParams);
+
+                if(asObjects === true) {
+                    console.log(newParams);
+                    return newParams;
+                }
+                else {
+                    data = pm.request.getBodyParamString(newParams);    
+                }
+                
             }
             else if (mode === "raw") {
                 data = pm.request.body.getRawData();
@@ -301,18 +312,25 @@ pm.request = {
                 for (i = 0; i < params.length; i++) {
                     param = {
                         key:params[i].key,
-                        value:params[i].value
+                        value:params[i].value,
+                        type:params[i].type
                     };
 
                     newParams.push(param);
                 }
-                data = pm.request.getBodyParamString(newParams);
+
+                if(asObjects === true) {
+                    return newParams;
+                }
+                else {
+                    data = pm.request.getBodyParamString(newParams);    
+                }                
             }
 
             return data;
         },
-
-        loadData:function (mode, data) {
+        
+        loadData:function (mode, data, asObjects) {
             var body = pm.request.body;
             body.setDataMode(mode);
 
@@ -320,15 +338,27 @@ pm.request = {
 
             var params;
             if (mode === "params") {
-                params = getBodyVars(data, false);
-                $('#formdata-keyvaleditor').keyvalueeditor('reset', params);
+                if(asObjects === true) {                    
+                    $('#formdata-keyvaleditor').keyvalueeditor('reset', data);        
+                }
+                else {
+                    params = getBodyVars(data, false);
+                    $('#formdata-keyvaleditor').keyvalueeditor('reset', params);    
+                }
+                
             }
             else if (mode === "raw") {
                 body.loadRawData(data);
             }
             else if (mode === "urlencoded") {
-                params = getBodyVars(data, false);
-                $('#urlencoded-keyvaleditor').keyvalueeditor('reset', params);
+                if(asObjects === true) {
+                    $('#urlencoded-keyvaleditor').keyvalueeditor('reset', data);
+                }
+                else {
+                    params = getBodyVars(data, false);
+                    $('#urlencoded-keyvaleditor').keyvalueeditor('reset', params);    
+                }
+                
             }
         }
     },
@@ -518,11 +548,14 @@ pm.request = {
     getAsJson:function () {
         var request = {
             url:$('#url').val(),
-            data:pm.request.body.getData(),
+            data:pm.request.body.getData(true),
             headers:pm.request.getPackedHeaders(),
             dataMode:pm.request.dataMode,
-            method:pm.request.method
+            method:pm.request.method,
+            version:2
         };
+
+        console.log(request);
 
         return JSON.stringify(request);
     },
@@ -633,6 +666,37 @@ pm.request = {
             var newRows = getUrlVars($('#url').val(), false);
             $('#url-keyvaleditor').keyvalueeditor('reset', newRows);
         });
+
+        $('#add-to-collection').on("click", function () {
+            if (pm.collections.areLoaded === false) {
+                pm.collections.getAllCollections();
+            }
+        });
+
+        $("#submit-request").on("click", function () {
+            pm.request.send("text");
+        });
+
+        $("#preview-request").on("click", function () {
+            pm.request.preview();
+        });
+
+        $("#update-request-in-collection").on("click", function () {
+            pm.collections.updateCollectionFromCurrentRequest();
+        });
+
+        $("#cancel-request").on("click", function () {
+            pm.request.cancel();
+        });
+
+        $("#request-actions-reset").on("click", function () {
+            pm.request.startNew();
+        });
+
+        $('#request-method-selector').change(function () {
+            var val = $(this).val();
+            pm.request.setMethod(val);
+        });
     },
 
     getTotalTime:function () {
@@ -657,6 +721,12 @@ pm.request = {
         setMode:function (mode) {
             var text = pm.request.response.text;
             pm.request.response.setFormat(mode, text, pm.settings.get("previewType"), true);
+        },
+
+        stripScriptTag:function (text) {
+            var re = /<script\b[^>]*>([\s\S]*?)<\/script>/gm;            
+            text = text.replace(re, "");            
+            return text;
         },
 
         changePreviewType:function (newType) {
@@ -693,7 +763,7 @@ pm.request = {
                 $('#response-as-code').css("display", "none");
                 $('#code-data').css("display", "none");
                 $('#response-as-preview').css("display", "block");
-                $('#response-pretty-modifiers').css("display", "none");
+                $('#response-pretty-modifiers').css("display", "none");                
             }
         },
 
@@ -798,7 +868,9 @@ pm.request = {
                     $('#response-as-code').css("display", "none");
                     $('#response-as-text').css("display", "none");
                     $('#response-as-image').css("display", "block");
-                    var imgLink = $('#url').val();
+                    
+                    var imgLink = pm.request.processUrl($('#url').val());
+
                     $('#response-formatting').css("display", "none");
                     $('#response-actions').css("display", "none");
                     $("#response-language").css("display", "none");
@@ -818,7 +890,9 @@ pm.request = {
             pm.request.response.renderCookies(response.cookies);
             if (responsePreviewType === "html") {
                 $("#response-as-preview").html("");
-                pm.filesystem.renderResponsePreview("response.html", response.text, "html", function (response_url) {
+                
+                var cleanResponseText = pm.request.response.stripScriptTag(pm.request.response.text);
+                pm.filesystem.renderResponsePreview("response.html", cleanResponseText, "html", function (response_url) {
                     $("#response-as-preview").html("<iframe></iframe>");
                     $("#response-as-preview iframe").attr("src", response_url);
                 });
@@ -931,7 +1005,8 @@ pm.request = {
                         $('#response-as-code').css("display", "none");
                         $('#response-as-text').css("display", "none");
                         $('#response-as-image').css("display", "block");
-                        var imgLink = $('#url').val();
+                        var imgLink = pm.request.processUrl($('#url').val());
+
                         $('#response-formatting').css("display", "none");
                         $('#response-actions').css("display", "none");
                         $("#response-language").css("display", "none");
@@ -977,11 +1052,12 @@ pm.request = {
                 pm.request.response.loadCookies(url);
 
                 if (responsePreviewType === "html") {
-                    $("#response-as-preview").html("");
-                    pm.filesystem.renderResponsePreview("response.html", pm.request.response.text, "html", function (response_url) {
+                    $("#response-as-preview").html("");                                    
+                    var cleanResponseText = pm.request.response.stripScriptTag(pm.request.response.text);                    
+                    pm.filesystem.renderResponsePreview("response.html", cleanResponseText, "html", function (response_url) {
                         $("#response-as-preview").html("<iframe></iframe>");
                         $("#response-as-preview iframe").attr("src", response_url);
-                    });
+                    });    
                 }
 
                 if (pm.request.method === "HEAD") {
@@ -1406,7 +1482,9 @@ pm.request = {
         }
     },
 
-    loadRequestInEditor:function (request, isFromCollection, isFromSample) {
+    loadRequestInEditor:function (request, isFromCollection, isFromSample) {        
+        console.log(request);
+
         pm.helpers.showRequestHelper("normal");
         this.url = request.url;
         this.body.data = request.body;
@@ -1476,6 +1554,7 @@ pm.request = {
             $('#update-request-in-collection').css("display", "inline-block");
         }
         else {
+            this.name = "";
             $('#request-meta').css("display", "none");
             $('#update-request-in-collection').css("display", "none");
         }
@@ -1504,7 +1583,19 @@ pm.request = {
         if (this.isMethodWithBody(this.method)) {
             this.dataMode = request.dataMode;
             $('#data').css("display", "block");
-            pm.request.body.loadData(request.dataMode, request.data);
+
+            if("version" in request) {
+                if(request.version == 2) {
+                    pm.request.body.loadData(request.dataMode, request.data, true);        
+                }
+                else {
+                    pm.request.body.loadData(request.dataMode, request.data);        
+                }
+            }
+            else {
+                pm.request.body.loadData(request.dataMode, request.data);    
+            }
+            
         }
         else {
             $('#data').css("display", "none");
@@ -1616,6 +1707,22 @@ pm.request = {
         return headers;
     },
 
+    processUrl:function (url) {
+        var envManager = pm.envManager;
+        var environment = envManager.selectedEnv;
+        var envValues = [];
+        var url = $('#url').val();
+        
+        if (environment !== null) {
+            envValues = environment.values;
+        }
+
+        url = envManager.processString(url, envValues);
+        url = ensureProperUrl(url);
+
+        return url;
+    },
+
     //Send the current request
     send:function (responseType) {
         // Set state as if change event of input handlers was called
@@ -1630,9 +1737,18 @@ pm.request = {
         $('#headers-keyvaleditor-actions-open .headers-count').html(pm.request.headers.length);
 
         var i;
-        this.url = $('#url').val();
+        this.url = pm.request.processUrl($('#url').val());
+        var envManager = pm.envManager;         
+        var environment = envManager.selectedEnv;
+        var envValues = [];
+        var url = $('#url').val();
+        
+        if (environment !== null) {
+            envValues = environment.values;
+        }
+
         var url = this.url;
-        this.body.data = pm.request.body.getData();
+        this.body.data = pm.request.body.getData(true);
 
         if (url === "") {
             return;
@@ -1640,26 +1756,18 @@ pm.request = {
 
         var xhr = new XMLHttpRequest();
         pm.request.xhr = xhr;
-
-        var envManager = pm.envManager;
-        var environment = envManager.selectedEnv;
-        var envValues = [];
-
-        if (environment !== null) {
-            envValues = environment.values;
-        }
-
-        url = envManager.processString(url, envValues);
-        url = ensureProperUrl(url);
-
         pm.request.url = url;
 
         url = pm.request.encodeUrl(url);
 
         var originalUrl = $('#url').val();
         var method = this.method.toUpperCase();
-        var data = pm.request.body.getRawData();
+
+        var data = pm.request.body.getData(true);
         var originalData = data;
+
+        console.log(originalData);
+
         var finalBodyData;
         var headers = this.headers;
 
@@ -1694,6 +1802,7 @@ pm.request = {
         var rows, count, j;
         var row, key, value;
 
+        // Prepare body
         if (this.isMethodWithBody(method)) {
             if (this.dataMode === 'raw') {
                 data = envManager.processString(data, envValues);
@@ -1771,5 +1880,20 @@ pm.request = {
         $('#submit-request').button("loading");
         pm.request.response.clear();
         pm.request.response.showScreen("waiting");
+    },
+
+    preview:function() {
+        console.log("Preview this request");
+        if(pm.request.editorMode == 1) {
+            pm.request.editorMode = 0;    
+            $("#request-builder").css("display", "block");
+            $("#request-preview").css("display", "none");    
+        }
+        else {
+            pm.request.editorMode = 1;    
+            $("#request-builder").css("display", "none");
+            $("#request-preview").css("display", "block");    
+        }               
     }
+
 };
