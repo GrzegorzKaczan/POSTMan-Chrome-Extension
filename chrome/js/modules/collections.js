@@ -170,7 +170,7 @@ pm.collections = {
         });
     },
 
-    importCollectionData:function (collection) {
+    importCollectionData:function (collection) {        
         pm.indexedDB.addCollection(collection, function (c) {
             var message = {
                 name:collection.name,
@@ -211,8 +211,9 @@ pm.collections = {
                 requests.push(request);
             }
 
+            pm.indexedDB.updateCollection(collection, function() {});
+            
             collection.requests = requests;
-
             pm.collections.render(collection);
         });
     },
@@ -333,8 +334,9 @@ pm.collections = {
         collectionRequest.headers = pm.request.getPackedHeaders();
         collectionRequest.url = url;
         collectionRequest.method = pm.request.method;
-        collectionRequest.data = pm.request.body.getData();
+        collectionRequest.data = pm.request.body.getData(true);
         collectionRequest.dataMode = pm.request.dataMode;
+        collectionRequest.version = 2;
         collectionRequest.time = new Date().getTime();
 
         pm.indexedDB.getCollectionRequest(collectionRequest.id, function (req) {
@@ -384,11 +386,12 @@ pm.collections = {
         collectionRequest.headers = pm.request.getPackedHeaders();
         collectionRequest.url = url;
         collectionRequest.method = pm.request.method;
-        collectionRequest.data = pm.request.body.getData();
+        collectionRequest.data = pm.request.body.getData(true);
         collectionRequest.dataMode = pm.request.dataMode;
         collectionRequest.name = newRequestName;
         collectionRequest.description = newRequestDescription;
         collectionRequest.time = new Date().getTime();
+        collectionRequest.version = 2;
         collectionRequest.responses = pm.request.responses;
 
         if (newCollection) {
@@ -445,6 +448,14 @@ pm.collections = {
                 pm.request.collectionRequestId = collectionRequest.id;
                 $('#update-request-in-collection').css("display", "inline-block");
                 pm.collections.openCollection(collectionRequest.collectionId);
+
+                //Update collection's order element    
+                pm.indexedDB.getCollection(collection.id, function(collection) {
+                    if("order" in collection) {
+                        collection["order"].push(collectionRequest.id);
+                        pm.indexedDB.updateCollection(collection, function() {});
+                    }
+                });
             });
         }
 
@@ -530,6 +541,8 @@ pm.collections = {
                         requests = orderedRequests;
                     }
                 }
+
+                console.log(requests);
 
                 $(targetElement).append(Handlebars.templates.collection_sidebar({"items":requests}));
                 $(targetElement).sortable({

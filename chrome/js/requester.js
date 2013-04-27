@@ -69,15 +69,14 @@ function sortAlphabetical(a, b) {
 
 var pm = {};
 
+pm.debug = true;
+
 pm.indexedDB = {};
 pm.indexedDB.db = null;
 pm.indexedDB.modes = {
     readwrite:"readwrite",
     readonly:"readonly"
 };
-
-pm.jsonlint = jsonlint_postman;
-jsonlint_postman = null;
 
 pm.fs = {};
 pm.webUrl = "http://getpostman.com";
@@ -147,7 +146,6 @@ window.requestFileSystem = window.requestFileSystem || window.webkitRequestFileS
  Bootstrap
  CodeMirror
  Underscore
- JsonLint
 
  Code status
 
@@ -163,6 +161,7 @@ pm.init = function () {
     pm.settings.init();
     pm.layout.init();
     pm.editor.init();
+    pm.jsonlint.init();
     pm.request.init();
     pm.urlCache.refreshAutoComplete();
     pm.helpers.init();
@@ -468,7 +467,7 @@ pm.collections = {
         });
     },
 
-    importCollectionData:function (collection) {
+    importCollectionData:function (collection) {        
         pm.indexedDB.addCollection(collection, function (c) {
             var message = {
                 name:collection.name,
@@ -509,8 +508,9 @@ pm.collections = {
                 requests.push(request);
             }
 
+            pm.indexedDB.updateCollection(collection, function() {});
+            
             collection.requests = requests;
-
             pm.collections.render(collection);
         });
     },
@@ -631,8 +631,9 @@ pm.collections = {
         collectionRequest.headers = pm.request.getPackedHeaders();
         collectionRequest.url = url;
         collectionRequest.method = pm.request.method;
-        collectionRequest.data = pm.request.body.getData();
+        collectionRequest.data = pm.request.body.getData(true);
         collectionRequest.dataMode = pm.request.dataMode;
+        collectionRequest.version = 2;
         collectionRequest.time = new Date().getTime();
 
         pm.indexedDB.getCollectionRequest(collectionRequest.id, function (req) {
@@ -682,11 +683,12 @@ pm.collections = {
         collectionRequest.headers = pm.request.getPackedHeaders();
         collectionRequest.url = url;
         collectionRequest.method = pm.request.method;
-        collectionRequest.data = pm.request.body.getData();
+        collectionRequest.data = pm.request.body.getData(true);
         collectionRequest.dataMode = pm.request.dataMode;
         collectionRequest.name = newRequestName;
         collectionRequest.description = newRequestDescription;
         collectionRequest.time = new Date().getTime();
+        collectionRequest.version = 2;
         collectionRequest.responses = pm.request.responses;
 
         if (newCollection) {
@@ -743,6 +745,14 @@ pm.collections = {
                 pm.request.collectionRequestId = collectionRequest.id;
                 $('#update-request-in-collection').css("display", "inline-block");
                 pm.collections.openCollection(collectionRequest.collectionId);
+
+                //Update collection's order element    
+                pm.indexedDB.getCollection(collection.id, function(collection) {
+                    if("order" in collection) {
+                        collection["order"].push(collectionRequest.id);
+                        pm.indexedDB.updateCollection(collection, function() {});
+                    }
+                });
             });
         }
 
@@ -828,6 +838,8 @@ pm.collections = {
                         requests = orderedRequests;
                     }
                 }
+
+                console.log(requests);
 
                 $(targetElement).append(Handlebars.templates.collection_sidebar({"items":requests}));
                 $(targetElement).sortable({
@@ -1037,6 +1049,11 @@ pm.envManager = {
             pm.envManager.showEditor(id);
         });
 
+        $('#environments-list').on("click", ".environment-action-duplicate", function () {
+            var id = $(this).attr('data-id');
+            pm.envManager.duplicateEnvironment(id);
+        });
+
         $('#environments-list').on("click", ".environment-action-download", function () {
             var id = $(this).attr('data-id');
             pm.envManager.downloadEnvironment(id);
@@ -1217,6 +1234,9 @@ pm.envManager = {
 
     getAllEnvironments:function () {
         pm.indexedDB.environments.getAllEnvironments(function (environments) {
+            environments.sort(sortAlphabetical);
+            console.log(environments);                
+            
             $('#environment-selector .dropdown-menu').html("");
             $('#environments-list tbody').html("");
             pm.envManager.environments = environments;
@@ -1340,6 +1360,26 @@ pm.envManager = {
             pm.envManager.getAllEnvironments();
             pm.envManager.showSelector();
         });
+    },
+
+    duplicateEnvironment:function (id) {
+        var env = pm.envManager.getEnvironmentFromId(id);
+        
+        //get a new name for this duplicated environment
+        env.name = env.name + " " + "copy";
+        
+        //change the env guid
+        env.id = guid();
+
+        pm.indexedDB.environments.addEnvironment(env, function () {
+            //Add confirmation
+            var o = {
+                name:env.name,
+                action:'added'
+            };
+
+            pm.envManager.getAllEnvironments();
+        });        
     },
 
     downloadEnvironment:function (id) {
@@ -2023,6 +2063,7 @@ pm.history = {
                     if (url.length > 80) {
                         url = url.substring(0, 80) + "...";
                     }
+
                     url = limitStringLineWidth(url, 40);
 
                     var request = {
@@ -2055,25 +2096,29 @@ pm.history = {
     },
 
     addRequest:function (url, method, headers, data, dataMode) {
+        console.log(data);
         var id = guid();
         var maxHistoryCount = pm.settings.get("historyCount");
         var requests = this.requests;
         var requestsCount = this.requests.length;
 
-        if (requestsCount >= maxHistoryCount) {
-            //Delete the last request
-            var lastRequest = requests[requestsCount - 1];
-            this.deleteRequest(lastRequest.id);
-        }
+        if(maxHistoryCount > 0) {
+            if (requestsCount >= maxHistoryCount) {
+                //Delete the last request
+                var lastRequest = requests[0];
+                this.deleteRequest(lastRequest.id);
+            }    
+        }        
 
         var historyRequest = {
             "id":id,
             "url":url.toString(),
             "method":method.toString(),
             "headers":headers.toString(),
-            "data":data.toString(),
+            "data":data,
             "dataMode":dataMode.toString(),
-            "timestamp":new Date().getTime()
+            "timestamp":new Date().getTime(),
+            "version": 2
         };
 
         var index = this.requestExists(historyRequest);
@@ -2259,11 +2304,24 @@ pm.indexedDB = {
         var trans = db.transaction(["collections"], "readwrite");
         var store = trans.objectStore("collections");
 
-        var request = store.put({
-            "id":collection.id,
-            "name":collection.name,
-            "timestamp":new Date().getTime()
-        });
+        var request;
+
+        if("order" in collection) {
+            request = store.put({
+                "id":collection.id,
+                "name":collection.name,
+                "order":collection.order,
+                "timestamp":new Date().getTime()
+            });
+        }
+        else {
+            request = store.put({
+                "id":collection.id,
+                "name":collection.name,
+                "timestamp":new Date().getTime()
+            });
+        }
+        
 
         request.onsuccess = function () {
             callback(collection);
@@ -2296,6 +2354,15 @@ pm.indexedDB = {
         var trans = db.transaction(["collection_requests"], "readwrite");
         var store = trans.objectStore("collection_requests");
 
+        var version;
+
+        if ("version" in req) {
+            version = req.version;
+        }
+        else {
+            version = 1;
+        }
+        
         var collectionRequest = store.put({
             "collectionId":req.collectionId,
             "id":req.id,
@@ -2304,10 +2371,11 @@ pm.indexedDB = {
             "url":req.url.toString(),
             "method":req.method.toString(),
             "headers":req.headers.toString(),
-            "data":req.data.toString(),
+            "data":req.data,
             "dataMode":req.dataMode.toString(),
             "timestamp":req.timestamp,
-            "responses":req.responses
+            "responses":req.responses,
+            "version":req.version
         });
 
         collectionRequest.onsuccess = function () {
@@ -2789,6 +2857,15 @@ pm.indexedDB = {
         }
     }
 };
+pm.jsonlint = {
+    instance: null,
+    
+    init: function() {
+      pm.jsonlint.instance = jsonlint_postman;
+      jsonlint_postman = null;
+    }
+};
+
 pm.keymap = {
     init:function () {
         var clearHistoryHandler = function () {
@@ -2936,11 +3013,15 @@ pm.layout = {
     },
 
     detectLauncher: function() {
+        if(pm.debug) {
+            return;    
+        }
+
         var launcherNotificationCount = pm.settings.get("launcherNotificationCount");        
         var maxCount = 1;
         if(launcherNotificationCount >= 1) {
             return true;
-        }
+        }        
 
         var extension_id = "igofndmniooofoabmmpfonmdnhgchoka";
         var extension_url = "https://chrome.google.com/webstore/detail/" + extension_id;        
@@ -3054,33 +3135,6 @@ pm.layout = {
         this.sidebar.init();
 
         pm.request.response.clear();
-
-        $('#add-to-collection').on("click", function () {
-            if (pm.collections.areLoaded === false) {
-                pm.collections.getAllCollections();
-            }
-        });
-
-        $("#submit-request").on("click", function () {
-            pm.request.send("text");
-        });
-
-        $("#update-request-in-collection").on("click", function () {
-            pm.collections.updateCollectionFromCurrentRequest();
-        });
-
-        $("#cancel-request").on("click", function () {
-            pm.request.cancel();
-        });
-
-        $("#request-actions-reset").on("click", function () {
-            pm.request.startNew();
-        });
-
-        $('#request-method-selector').change(function () {
-            var val = $(this).val();
-            pm.request.setMethod(val);
-        });
 
         $('#sidebar-selectors li a').click(function () {
             var id = $(this).attr('data-id');
@@ -3323,7 +3377,7 @@ pm.layout = {
     },
 
     setLayout:function () {
-        this.refreshScrollPanes();
+        this.refreshScrollPanes();        
     },
 
     refreshScrollPanes:function () {
@@ -3492,11 +3546,12 @@ pm.request = {
     dataMode:"params",
     isFromCollection:false,
     collectionRequestId:"",
-    methodsWithBody:["POST", "PUT", "PATCH", "DELETE"],
+    methodsWithBody:["POST", "PUT", "PATCH", "DELETE", "LINK", "UNLINK"],
     areListenersAdded:false,
     startTime:0,
     endTime:0,
     xhr:null,
+    editorMode:0,
     responses:[],
 
     body:{
@@ -3570,19 +3625,18 @@ pm.request = {
                 else {
                     pm.request.body.codeMirror.setOption("mode", mode);
                 }
-                
+
                 if (mode === "text") {
                   $('#body-editor-mode-selector-format').addClass('disabled');
                 } else {
                   $('#body-editor-mode-selector-format').removeClass('disabled');
                 }
 
-                pm.request.body.autoFormatEditor(mode);
+                //pm.request.body.autoFormatEditor(mode);
                 pm.request.body.codeMirror.refresh();
             }
-
         },
-        
+
         autoFormatEditor:function (mode) {
           var content = pm.request.body.codeMirror.getValue(),
               validated = null, result = null;
@@ -3597,7 +3651,7 @@ pm.request = {
               
               // Validate code first.
               try {
-                validated = pm.jsonlint.parse(content);
+                validated = pm.jsonlint.instance.parse(content);
                 if (validated) {
                   content = JSON.parse(pm.request.body.codeMirror.getValue());
                   pm.request.body.codeMirror.setValue(JSON.stringify(content, null, 4));
@@ -3665,12 +3719,13 @@ pm.request = {
             
             // 'Format code' button listener.
             $('#body-editor-mode-selector-format').on('click.postman', function(evt) {
-              
+              var editorMode = $(event.target).attr("data-editor-mode");
+
               if ($(evt.currentTarget).hasClass('disabled')) {
                 return;
               }
-              
-              pm.request.body.autoFormatEditor(pm.request.body.codeMirror.getMode().name);
+
+              //pm.request.body.autoFormatEditor(pm.request.body.codeMirror.getMode().name);
             });
         },
 
@@ -3754,7 +3809,8 @@ pm.request = {
             return pm.request.body.mode;
         },
 
-        getData:function () {
+        //Be able to return direct keyvaleditor params
+        getData:function (asObjects) {
             var data;
             var mode = pm.request.body.mode;
             var params;
@@ -3768,12 +3824,21 @@ pm.request = {
                 for (i = 0; i < params.length; i++) {
                     param = {
                         key:params[i].key,
-                        value:params[i].value
+                        value:params[i].value,
+                        type:params[i].type
                     };
 
                     newParams.push(param);
                 }
-                data = pm.request.getBodyParamString(newParams);
+
+                if(asObjects === true) {
+                    console.log(newParams);
+                    return newParams;
+                }
+                else {
+                    data = pm.request.getBodyParamString(newParams);    
+                }
+                
             }
             else if (mode === "raw") {
                 data = pm.request.body.getRawData();
@@ -3784,18 +3849,25 @@ pm.request = {
                 for (i = 0; i < params.length; i++) {
                     param = {
                         key:params[i].key,
-                        value:params[i].value
+                        value:params[i].value,
+                        type:params[i].type
                     };
 
                     newParams.push(param);
                 }
-                data = pm.request.getBodyParamString(newParams);
+
+                if(asObjects === true) {
+                    return newParams;
+                }
+                else {
+                    data = pm.request.getBodyParamString(newParams);    
+                }                
             }
 
             return data;
         },
-
-        loadData:function (mode, data) {
+        
+        loadData:function (mode, data, asObjects) {
             var body = pm.request.body;
             body.setDataMode(mode);
 
@@ -3803,15 +3875,27 @@ pm.request = {
 
             var params;
             if (mode === "params") {
-                params = getBodyVars(data, false);
-                $('#formdata-keyvaleditor').keyvalueeditor('reset', params);
+                if(asObjects === true) {                    
+                    $('#formdata-keyvaleditor').keyvalueeditor('reset', data);        
+                }
+                else {
+                    params = getBodyVars(data, false);
+                    $('#formdata-keyvaleditor').keyvalueeditor('reset', params);    
+                }
+                
             }
             else if (mode === "raw") {
                 body.loadRawData(data);
             }
             else if (mode === "urlencoded") {
-                params = getBodyVars(data, false);
-                $('#urlencoded-keyvaleditor').keyvalueeditor('reset', params);
+                if(asObjects === true) {
+                    $('#urlencoded-keyvaleditor').keyvalueeditor('reset', data);
+                }
+                else {
+                    params = getBodyVars(data, false);
+                    $('#urlencoded-keyvaleditor').keyvalueeditor('reset', params);    
+                }
+                
             }
         }
     },
@@ -4001,11 +4085,14 @@ pm.request = {
     getAsJson:function () {
         var request = {
             url:$('#url').val(),
-            data:pm.request.body.getData(),
+            data:pm.request.body.getData(true),
             headers:pm.request.getPackedHeaders(),
             dataMode:pm.request.dataMode,
-            method:pm.request.method
+            method:pm.request.method,
+            version:2
         };
+
+        console.log(request);
 
         return JSON.stringify(request);
     },
@@ -4116,6 +4203,37 @@ pm.request = {
             var newRows = getUrlVars($('#url').val(), false);
             $('#url-keyvaleditor').keyvalueeditor('reset', newRows);
         });
+
+        $('#add-to-collection').on("click", function () {
+            if (pm.collections.areLoaded === false) {
+                pm.collections.getAllCollections();
+            }
+        });
+
+        $("#submit-request").on("click", function () {
+            pm.request.send("text");
+        });
+
+        $("#preview-request").on("click", function () {
+            pm.request.preview();
+        });
+
+        $("#update-request-in-collection").on("click", function () {
+            pm.collections.updateCollectionFromCurrentRequest();
+        });
+
+        $("#cancel-request").on("click", function () {
+            pm.request.cancel();
+        });
+
+        $("#request-actions-reset").on("click", function () {
+            pm.request.startNew();
+        });
+
+        $('#request-method-selector').change(function () {
+            var val = $(this).val();
+            pm.request.setMethod(val);
+        });
     },
 
     getTotalTime:function () {
@@ -4140,6 +4258,12 @@ pm.request = {
         setMode:function (mode) {
             var text = pm.request.response.text;
             pm.request.response.setFormat(mode, text, pm.settings.get("previewType"), true);
+        },
+
+        stripScriptTag:function (text) {
+            var re = /<script\b[^>]*>([\s\S]*?)<\/script>/gm;            
+            text = text.replace(re, "");            
+            return text;
         },
 
         changePreviewType:function (newType) {
@@ -4176,7 +4300,7 @@ pm.request = {
                 $('#response-as-code').css("display", "none");
                 $('#code-data').css("display", "none");
                 $('#response-as-preview').css("display", "block");
-                $('#response-pretty-modifiers').css("display", "none");
+                $('#response-pretty-modifiers').css("display", "none");                
             }
         },
 
@@ -4281,7 +4405,9 @@ pm.request = {
                     $('#response-as-code').css("display", "none");
                     $('#response-as-text').css("display", "none");
                     $('#response-as-image').css("display", "block");
-                    var imgLink = $('#url').val();
+                    
+                    var imgLink = pm.request.processUrl($('#url').val());
+
                     $('#response-formatting').css("display", "none");
                     $('#response-actions').css("display", "none");
                     $("#response-language").css("display", "none");
@@ -4301,7 +4427,9 @@ pm.request = {
             pm.request.response.renderCookies(response.cookies);
             if (responsePreviewType === "html") {
                 $("#response-as-preview").html("");
-                pm.filesystem.renderResponsePreview("response.html", response.text, "html", function (response_url) {
+                
+                var cleanResponseText = pm.request.response.stripScriptTag(pm.request.response.text);
+                pm.filesystem.renderResponsePreview("response.html", cleanResponseText, "html", function (response_url) {
                     $("#response-as-preview").html("<iframe></iframe>");
                     $("#response-as-preview iframe").attr("src", response_url);
                 });
@@ -4414,7 +4542,8 @@ pm.request = {
                         $('#response-as-code').css("display", "none");
                         $('#response-as-text').css("display", "none");
                         $('#response-as-image').css("display", "block");
-                        var imgLink = $('#url').val();
+                        var imgLink = pm.request.processUrl($('#url').val());
+
                         $('#response-formatting').css("display", "none");
                         $('#response-actions').css("display", "none");
                         $("#response-language").css("display", "none");
@@ -4460,11 +4589,12 @@ pm.request = {
                 pm.request.response.loadCookies(url);
 
                 if (responsePreviewType === "html") {
-                    $("#response-as-preview").html("");
-                    pm.filesystem.renderResponsePreview("response.html", pm.request.response.text, "html", function (response_url) {
+                    $("#response-as-preview").html("");                                    
+                    var cleanResponseText = pm.request.response.stripScriptTag(pm.request.response.text);                    
+                    pm.filesystem.renderResponsePreview("response.html", cleanResponseText, "html", function (response_url) {
                         $("#response-as-preview").html("<iframe></iframe>");
                         $("#response-as-preview iframe").attr("src", response_url);
-                    });
+                    });    
                 }
 
                 if (pm.request.method === "HEAD") {
@@ -4889,7 +5019,9 @@ pm.request = {
         }
     },
 
-    loadRequestInEditor:function (request, isFromCollection, isFromSample) {
+    loadRequestInEditor:function (request, isFromCollection, isFromSample) {        
+        console.log(request);
+
         pm.helpers.showRequestHelper("normal");
         this.url = request.url;
         this.body.data = request.body;
@@ -4959,6 +5091,7 @@ pm.request = {
             $('#update-request-in-collection').css("display", "inline-block");
         }
         else {
+            this.name = "";
             $('#request-meta').css("display", "none");
             $('#update-request-in-collection').css("display", "none");
         }
@@ -4987,7 +5120,19 @@ pm.request = {
         if (this.isMethodWithBody(this.method)) {
             this.dataMode = request.dataMode;
             $('#data').css("display", "block");
-            pm.request.body.loadData(request.dataMode, request.data);
+
+            if("version" in request) {
+                if(request.version == 2) {
+                    pm.request.body.loadData(request.dataMode, request.data, true);        
+                }
+                else {
+                    pm.request.body.loadData(request.dataMode, request.data);        
+                }
+            }
+            else {
+                pm.request.body.loadData(request.dataMode, request.data);    
+            }
+            
         }
         else {
             $('#data').css("display", "none");
@@ -5099,6 +5244,22 @@ pm.request = {
         return headers;
     },
 
+    processUrl:function (url) {
+        var envManager = pm.envManager;
+        var environment = envManager.selectedEnv;
+        var envValues = [];
+        var url = $('#url').val();
+        
+        if (environment !== null) {
+            envValues = environment.values;
+        }
+
+        url = envManager.processString(url, envValues);
+        url = ensureProperUrl(url);
+
+        return url;
+    },
+
     //Send the current request
     send:function (responseType) {
         // Set state as if change event of input handlers was called
@@ -5113,9 +5274,18 @@ pm.request = {
         $('#headers-keyvaleditor-actions-open .headers-count').html(pm.request.headers.length);
 
         var i;
-        this.url = $('#url').val();
+        this.url = pm.request.processUrl($('#url').val());
+        var envManager = pm.envManager;         
+        var environment = envManager.selectedEnv;
+        var envValues = [];
+        var url = $('#url').val();
+        
+        if (environment !== null) {
+            envValues = environment.values;
+        }
+
         var url = this.url;
-        this.body.data = pm.request.body.getData();
+        this.body.data = pm.request.body.getData(true);
 
         if (url === "") {
             return;
@@ -5123,26 +5293,18 @@ pm.request = {
 
         var xhr = new XMLHttpRequest();
         pm.request.xhr = xhr;
-
-        var envManager = pm.envManager;
-        var environment = envManager.selectedEnv;
-        var envValues = [];
-
-        if (environment !== null) {
-            envValues = environment.values;
-        }
-
-        url = envManager.processString(url, envValues);
-        url = ensureProperUrl(url);
-
         pm.request.url = url;
 
         url = pm.request.encodeUrl(url);
 
         var originalUrl = $('#url').val();
         var method = this.method.toUpperCase();
-        var data = pm.request.body.getRawData();
+
+        var data = pm.request.body.getData(true);
         var originalData = data;
+
+        console.log(originalData);
+
         var finalBodyData;
         var headers = this.headers;
 
@@ -5177,6 +5339,7 @@ pm.request = {
         var rows, count, j;
         var row, key, value;
 
+        // Prepare body
         if (this.isMethodWithBody(method)) {
             if (this.dataMode === 'raw') {
                 data = envManager.processString(data, envValues);
@@ -5254,7 +5417,22 @@ pm.request = {
         $('#submit-request').button("loading");
         pm.request.response.clear();
         pm.request.response.showScreen("waiting");
+    },
+
+    preview:function() {
+        console.log("Preview this request");
+        if(pm.request.editorMode == 1) {
+            pm.request.editorMode = 0;    
+            $("#request-builder").css("display", "block");
+            $("#request-preview").css("display", "none");    
+        }
+        else {
+            pm.request.editorMode = 1;    
+            $("#request-builder").css("display", "none");
+            $("#request-preview").css("display", "block");    
+        }               
     }
+
 };
 pm.settings = {
     historyCount:50,

@@ -40,6 +40,14 @@ a, a:hover {
     outline: none;
 }
 
+#request-preview {
+    display: none;
+}
+
+#preview-request {
+    display: none;
+}
+
 #request-method-selector {
     width: 100px;
 }
@@ -839,6 +847,12 @@ li .right {
     margin-left: 10px;
 }
 
+#response-copy {
+    float: left;
+    margin-left: 5px;
+    margin-top: 17px;
+}
+
 #response-collection-request-actions {
     float: left;
     margin-left: 5px;
@@ -1244,8 +1258,7 @@ li .right {
     margin-bottom: 10px;
 }
 
-#url-keyvaleditor-actions,
-#headers-keyvaleditor-actions {
+#url-keyvaleditor-actions {
     width: 510px;
 }
 
@@ -1341,11 +1354,11 @@ li .right {
     display: none;
 }
 
-#body-editor-mode-selector .btn-group a {
+#body-editor-mode-selector .btn-group a.dropdown {
     font-size: 12px !important;
     margin-top: 5px;
-    float: left;
     width: 40px;
+    float: left;    
     margin-right: 15px;
 }
 

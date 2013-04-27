@@ -9,11 +9,15 @@ pm.layout = {
     },
 
     detectLauncher: function() {
+        if(pm.debug) {
+            return;    
+        }
+
         var launcherNotificationCount = pm.settings.get("launcherNotificationCount");        
         var maxCount = 1;
         if(launcherNotificationCount >= 1) {
             return true;
-        }
+        }        
 
         var extension_id = "igofndmniooofoabmmpfonmdnhgchoka";
         var extension_url = "https://chrome.google.com/webstore/detail/" + extension_id;        
@@ -127,33 +131,6 @@ pm.layout = {
         this.sidebar.init();
 
         pm.request.response.clear();
-
-        $('#add-to-collection').on("click", function () {
-            if (pm.collections.areLoaded === false) {
-                pm.collections.getAllCollections();
-            }
-        });
-
-        $("#submit-request").on("click", function () {
-            pm.request.send("text");
-        });
-
-        $("#update-request-in-collection").on("click", function () {
-            pm.collections.updateCollectionFromCurrentRequest();
-        });
-
-        $("#cancel-request").on("click", function () {
-            pm.request.cancel();
-        });
-
-        $("#request-actions-reset").on("click", function () {
-            pm.request.startNew();
-        });
-
-        $('#request-method-selector').change(function () {
-            var val = $(this).val();
-            pm.request.setMethod(val);
-        });
 
         $('#sidebar-selectors li a').click(function () {
             var id = $(this).attr('data-id');
@@ -396,7 +373,7 @@ pm.layout = {
     },
 
     setLayout:function () {
-        this.refreshScrollPanes();
+        this.refreshScrollPanes();        
     },
 
     refreshScrollPanes:function () {
